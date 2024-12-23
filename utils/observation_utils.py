@@ -12,6 +12,10 @@ from utils.consts import (
 )
 
 
+from dotenv import load_dotenv
+load_dotenv()
+
+
 
 def remove_duplicate_args(args, shapes):
     args_shapes = list(zip(args, shapes))
@@ -196,7 +200,7 @@ def lower_linalg_to_loops(mlir_code, tmp_file):
     """
     Lower Linalg dialect code to Affine dialect
     """
-    # command = f'echo "{mlir_code}" | /scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt --linalg-fuse-elementwise-ops --linalg-fold-unit-extent-dims --linalg-bufferize --convert-linalg-to-affine-loops /dev/stdin'
+    # command = f'echo "{mlir_code}" | /scratch/mt5383/llvm-project/build/bin/mlir-opt --linalg-fuse-elementwise-ops --linalg-fold-unit-extent-dims --linalg-bufferize --convert-linalg-to-affine-loops /dev/stdin'
     # result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     # tmp_file = "/scratch/nb3891/Script/MLIR_RL_2/examples/temp_mlir.mlir"
@@ -209,7 +213,7 @@ def lower_linalg_to_loops(mlir_code, tmp_file):
 # )
 # buffer-deallocation-pipeline
     
-    out = os.popen(f"""/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt --linalg-fuse-elementwise-ops --linalg-fold-unit-extent-dims --one-shot-bufferize=bufferize-function-boundaries --finalizing-bufferize --buffer-deallocation-pipeline --convert-linalg-to-affine-loops {tmp_file}""").read()
+    out = os.popen(f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt --linalg-fuse-elementwise-ops --linalg-fold-unit-extent-dims --one-shot-bufferize=bufferize-function-boundaries --finalizing-bufferize --buffer-deallocation-pipeline --convert-linalg-to-affine-loops {tmp_file}").read()
 
     if out != '':
         return out

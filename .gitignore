@@ -3,6 +3,6 @@ MyASTGenerator/build
 .neptune
 jobs_logs
 models
-examples
 tmp_files
 __pycache__/
+.env

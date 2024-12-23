@@ -2,6 +2,8 @@ import os
 import subprocess
 import multiprocessing
 import re
+from dotenv import load_dotenv
+load_dotenv()
 
 
 def print_info(*args):
