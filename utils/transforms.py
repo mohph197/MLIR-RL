@@ -653,18 +653,8 @@ def apply_transformation(state, code, transformation, parameters):
             return ''
         new_code = transform_dialect_tile(code, state.operation_tag, parameters, tmp_file)
     elif transformation == 'parallelization':
-        if not parameters or (state.operation_type == 'matmul' and parameters[-1] > 0):
+        if not parameters:
             return ''
-        if 'iterator_types' in code:
-            iterators_matches = re.findall(r'iterator_types\s*=\s*(\[(\s*"(parallel|reduction)"\s*,?)+\])', code)
-            for iterators_match in iterators_matches:
-                iterators = iterators_match[0]
-                iterators_list = eval(iterators)
-                if type(iterators_list) is not list or len(iterators_list) != len(parameters):
-                    continue
-                for i, iterator_type in enumerate(iterators_list):
-                    if iterator_type == "reduction" and parameters[i] > 0:
-                        return ''
         new_code = transform_dialect_TP(code, state.operation_tag, parameters, tmp_file)
     elif transformation == 'interchange':
         new_code = transform_dialect_interchange(code, state.operation_tag, parameters, tmp_file)
