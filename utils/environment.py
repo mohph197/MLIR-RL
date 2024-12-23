@@ -35,6 +35,8 @@ from tqdm import tqdm
 import string
 import math
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 def generate_random_string():
     return ''.join(random.choices(string.ascii_letters + string.digits, k=10))
@@ -101,11 +103,11 @@ def get_obs(state: OperationState):
     obs = np.concatenate((
         # The input of the policy network:
         operation_type,  # 1
-        loops_data,      # MAX_NUM_LOOPS + MAX_NUM_LOOPS*MAX_NUM_LOAD_STORE_DIM*MAX_NUM_STORES_LOADS + MAX_NUM_LOOPS*MAX_NUM_LOAD_STORE_DIM + 5
-        action_history,  # MAX_NUM_LOOPS*3*CONFIG["truncate"]
+        loops_data,      # MAX_NUM_LOOPS + MAX_NUM_LOOPS * MAX_NUM_LOAD_STORE_DIM * MAX_NUM_STORES_LOADS + MAX_NUM_LOOPS * MAX_NUM_LOAD_STORE_DIM + 5
+        action_history,  # MAX_NUM_LOOPS * 3 * CONFIG["truncate"]
 
         # The action mask:
-        action_mask     # 5 + MAX_NUM_LOOPS + MAX_NUM_LOOPS + (MAX_NUM_LOOPS-1) + (MAX_NUM_LOOPS-2) + (MAX_NUM_LOOPS-3)
+        action_mask     # 5 + MAX_NUM_LOOPS + MAX_NUM_LOOPS + (MAX_NUM_LOOPS - 1) + (MAX_NUM_LOOPS - 2) + (MAX_NUM_LOOPS - 3)
     ))
 
     # Normalize the upper bounds of the loops
@@ -116,7 +118,7 @@ def get_obs(state: OperationState):
 def initialize_action_mask(num_loops, operation_type):
     """
     Action mask (5 + L + L + (L-1) + (L-2) + (L-3) ):
-        Transformations: end, TP, T, Interchange
+        Transformations: end, TP, T, Interchange, img2col
         TP: L loops
         T : L loops
         Interchange: 2-consecutive interchanges: L - 1
@@ -138,8 +140,11 @@ def initialize_action_mask(num_loops, operation_type):
     if operation_type == 'conv_2d':
         action_mask[:5] = [False, False, False, False, True]
     else:
-        action_mask[:5] = [False, True, False, False, False]
-        # action_mask[:5] = [False, True, True, True, False]
+        p_only = os.getenv("RL_ACTION_MASK") == "P_ONLY"
+        if p_only:
+            action_mask[:5] = [False, True, False, False, False]
+        else:
+            action_mask[:5] = [False, True, True, True, False]
     action_mask[TP_BEGIN + num_loops:T_BEGIN] = False
     action_mask[T_BEGIN + num_loops:I_BEGIN_2C] = False
     action_mask[I_BEGIN_2C + num_loops - 1:I_BEGIN_3C] = False
@@ -426,11 +431,6 @@ class Env:
         # The number of loops in the Linalg operations
         if self.from_lqcd:
             bench_name = raw_operation
-            bench_file = os.path.join("lqcd-benchmarks", bench_name + ".mlir")
-            with open(bench_file, "r") as file:
-                code = file.read()
-            real_exec_time, _ = lower_and_run_code(code, bench_name)
-            print_info(f"Real exec time: {real_exec_time}, expected exec time: {exec_time}")
             lqcd_operation_tag = operation_dict["ops_tags"][0]
             lqcd_operation_dict = operation_dict[lqcd_operation_tag]
             num_loops = len(lqcd_operation_dict["nested_loops"])

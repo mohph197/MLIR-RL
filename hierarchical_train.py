@@ -13,6 +13,7 @@ import torch
 
 from tqdm import tqdm
 import neptune
+from utils.csv_logger import CSVLogger
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -136,7 +137,10 @@ def collect_trajectory(len_trajectory, model: MyModel, env: ParallelEnv, logs=Fa
                 if neptune_logs is not None and logs:
                     neptune_logs['train/final_speedup'].append(speedup_metric)
                     neptune_logs['train/cummulative_reward'].append(final_state.cummulative_reward)
-                    neptune_logs[f'train/{final_state.raw_operation}_speedup'].append(speedup_metric)
+                    neptune_logs[f'train/{final_state.bench_name}_speedup'].append(speedup_metric)
+
+                csv_logger.log_sample(speedup_metric, final_state.cummulative_reward)
+                csv_logger.log_bench_train(final_state.bench_name, speedup_metric)
 
                 # running_return_stats.add(final_state.raw_operation, speedup_metric)
 
@@ -318,7 +322,7 @@ def ppo_update(trajectory, model, optimizer, ppo_epochs, ppo_batch_size, logs=Fa
                 neptune_logs['train/entropy'].append(entropy.item())
                 neptune_logs['train/clip_factor'].append(clip_factor.item())
 
-
+            csv_logger.log_train(policy_loss.item(), value_loss.item(), entropy.item(), clip_factor.item())
 
 
 
@@ -359,7 +363,9 @@ def evaluate_benchamrk(model: MyModel, env: ParallelEnv, logs):
                 print('Speedup:', speedup_metric)
 
                 if neptune_logs is not None and logs:
-                    neptune_logs[f'eval/{final_state.raw_operation}_speedup'].append(speedup_metric)
+                    neptune_logs[f'eval/{final_state.bench_name}_speedup'].append(speedup_metric)
+
+                csv_logger.log_bench_eval(final_state.bench_name, speedup_metric)
 
                 break
 
@@ -376,13 +382,14 @@ CONFIG = {
     'ppo_batch_size': 64,
     'steps': 10000,
     'ppo_epochs': 4,
-    'logs': True,
+    'logs': False,
     'entropy_coef': 0.01,
     'lr': 0.001,
     'truncate': 5,
     # 'json_file': os.path.abspath("generated_data/train_operations.json"),
     'json_file': os.path.abspath("lqcd-benchmarks/lqcd.json"),
     'from_lqcd': True,
+    'action_mask': os.getenv('RL_ACTION_MASK', 'DEFAULT')
 }
 
 env = ParallelEnv(
@@ -431,7 +438,10 @@ running_return_stats = Buffer(max_size=10000)
 
 print_info('Start training ... ')
 logs = CONFIG['logs']
-neptune_logs = init_neptune(['hierchical', 'sparse_reward'] + [k + ':' + str(v) for (k, v) in CONFIG.items()]) if logs else None
+tags_list = ['hierchical', 'sparse_reward'] + [k + ':' + str(v) for (k, v) in CONFIG.items()]
+# neptune_logs = init_neptune(tags_list) if logs else None
+neptune_logs = None
+csv_logger = CSVLogger('./results', tags_list)
 
 if logs:
     neptune_logs["config_files"].upload_files([

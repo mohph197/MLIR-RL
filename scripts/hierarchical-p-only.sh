@@ -8,8 +8,8 @@
 #SBATCH -c 28
 #SBATCH --mem=64G
 #SBATCH -t 07-00
-#SBATCH -o /scratch/mt5383/MLIR-RL/scripts/hierarchical.out
-#SBATCH -e /scratch/mt5383/MLIR-RL/scripts/hierarchical.err
+#SBATCH -o /scratch/mt5383/MLIR-RL/scripts/hierarchical-p-only.out
+#SBATCH -e /scratch/mt5383/MLIR-RL/scripts/hierarchical-p-only.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=mt5383@nyu.edu
 
@@ -23,4 +23,4 @@ eval "$(conda shell.bash hook)"
 conda activate main
 
 #Execute the code
-python /scratch/mt5383/MLIR-RL/hierarchical_train.py
+RL_ACTION_MASK="P_ONLY" python /scratch/mt5383/MLIR-RL/hierarchical_train.py

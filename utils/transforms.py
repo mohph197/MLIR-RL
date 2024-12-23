@@ -75,7 +75,6 @@ def get_ast(raw_ast_info):
 
 def extract_loops_data_from_ast_result(raw_ast_info: str, execution_time: float) -> dict[str, Any]:
     info, full_code = raw_ast_info.split("########################################")
-    # exec_time = lower_and_run_code(full_code)
     operations_lines, _ = info.split('#BEGIN_GRAPH')
 
     operations_blocks = operations_lines.split('#START_OPERATION')

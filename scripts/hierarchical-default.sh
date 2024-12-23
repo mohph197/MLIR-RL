@@ -8,8 +8,8 @@
 #SBATCH -c 28
 #SBATCH --mem=64G
 #SBATCH -t 07-00
-#SBATCH -o /scratch/mt5383/MLIR-RL/scripts/hierarchical.out
-#SBATCH -e /scratch/mt5383/MLIR-RL/scripts/hierarchical.err
+#SBATCH -o /scratch/mt5383/MLIR-RL/scripts/hierarchical-default.out
+#SBATCH -e /scratch/mt5383/MLIR-RL/scripts/hierarchical-default.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=mt5383@nyu.edu
 
