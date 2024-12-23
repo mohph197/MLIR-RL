@@ -1,25 +1,23 @@
 import os
 import subprocess
-import random
-from sympy import evaluate
-from copy import copy
-from tqdm import tqdm
 import multiprocessing
 import re
-
 
 
 def print_info(*args):
     message = ' '.join(map(str, args))
     print(f"\033[94m[INFO]\t {message}\033[0m")
 
+
 def print_success(*args):
     message = ' '.join(map(str, args))
     print(f"\033[92m[SUCCESS]\t {message}\033[0m")
 
+
 def print_alert(*args):
     message = ' '.join(map(str, args))
     print(f"\033[93m[ALERT]\t {message}\033[0m")
+
 
 def print_error(*args):
     message = ' '.join(map(str, args))
@@ -78,7 +76,16 @@ def get_ast(raw_ast_info):
 
 def transform_dialect_TP(code, operation_tag, tiling_size, tmp_file):
     code = code.strip()
-    transform_dilaect_code = f'\nmodule attributes {{transform.with_named_sequence}} {{\n  transform.named_sequence @__transform_main(%arg1: !transform.any_op {{transform.readonly}}) {{\n    %op_{operation_tag} = transform.structured.match attributes{{tag = "{operation_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op\n    %tiled_op_{operation_tag}, %forall_op_{operation_tag} = transform.structured.tile_using_forall %op_{operation_tag}  tile_sizes {str(tiling_size)} : (!transform.any_op) -> (!transform.any_op, !transform.any_op)\n    transform.yield\n  }}\n}}'
+    transform_dilaect_code = (
+        f'\nmodule attributes {{transform.with_named_sequence}} {{\n'
+        f'  transform.named_sequence @__transform_main(%arg1: !transform.any_op {{transform.readonly}}) {{\n'
+        f'    %op_{operation_tag} = transform.structured.match attributes{{tag = "{operation_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op\n'
+        f'    %tiled_op_{operation_tag}, %forall_op_{operation_tag} = transform.structured.tile_using_forall %op_{operation_tag}  tile_sizes {str(tiling_size)} : (!transform.any_op) -> (!transform.any_op, !transform.any_op)\n'
+        f'    %parallel_op_{operation_tag} = transform.loop.forall_to_parallel %forall_op_{operation_tag} : (!transform.any_op) -> !transform.any_op\n'
+        f'    transform.yield\n'
+        f'  }}\n'
+        f'}}'
+    )
 
     code = code + transform_dilaect_code
 
@@ -86,7 +93,7 @@ def transform_dialect_TP(code, operation_tag, tiling_size, tmp_file):
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
@@ -96,20 +103,20 @@ def transform_dialect_TP(code, operation_tag, tiling_size, tmp_file):
     return result
 
 
-
 def transform_dialect_tile(code, operation_tag, tiling_size, tmp_file):
     code = code.strip()
     n_loops = sum([s != 0 for s in tiling_size])
-    r = ', '.join(['!transform.any_op']*n_loops)
+    r = ', '.join(['!transform.any_op'] * n_loops)
 
-    transform_dilaect_code = f"""
-    module attributes {{transform.with_named_sequence}} {{
-          transform.named_sequence @__transform_main(%arg1: !transform.any_op {{transform.readonly}}) {{
-            %op_{operation_tag} = transform.structured.match attributes{{tag = "{operation_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op
-        %tiled_op_{operation_tag}, %loops:{n_loops} = transform.structured.tile_using_for %op_{operation_tag} {str(tiling_size)} : (!transform.any_op) -> (!transform.any_op, {r})
-        transform.yield
-      }}
-    }}"""
+    transform_dilaect_code = (
+        f'\nmodule attributes {{transform.with_named_sequence}} {{\n'
+        f'  transform.named_sequence @__transform_main(%arg1: !transform.any_op {{transform.readonly}}) {{\n'
+        f'    %op_{operation_tag} = transform.structured.match attributes{{tag = "{operation_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op\n'
+        f'    %tiled_op_{operation_tag}, %loops:{n_loops} = transform.structured.tile_using_for %op_{operation_tag} {str(tiling_size)} : (!transform.any_op) -> (!transform.any_op, {r})\n'
+        f'    transform.yield\n'
+        f'  }}\n'
+        f'}}\n'
+    )
 
     code = code + transform_dilaect_code + '\n'
 
@@ -117,7 +124,7 @@ def transform_dialect_tile(code, operation_tag, tiling_size, tmp_file):
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
@@ -125,9 +132,6 @@ def transform_dialect_tile(code, operation_tag, tiling_size, tmp_file):
     result = re.sub(r"module attributes \{transform.with_named_sequence\} \{\s+\}", "", result)
 
     return result
-
-
-
 
 
 def transform_dialect_interchange(code, operation_tag, interchange_list, tmp_file):
@@ -136,16 +140,18 @@ def transform_dialect_interchange(code, operation_tag, interchange_list, tmp_fil
 
     code = code.strip()
 
-    transform_dilaect_code = f"""
-    module attributes {{transform.with_named_sequence}} {{
-          transform.named_sequence @__transform_main(%arg1: !transform.any_op {{transform.readonly}}) {{
-            %op_{operation_tag} = transform.structured.match attributes{{tag = "{operation_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op
-        %gen_op_{operation_tag} = transform.structured.generalize %op_{operation_tag} : (!transform.any_op) -> !transform.any_op
-        %interchanged_op = transform.structured.interchange %gen_op_{operation_tag} iterator_interchange = {str(interchange_list)} : (!transform.any_op) -> !transform.any_op
-        %interchanged_tag = transform.param.constant "{operation_tag}" -> !transform.any_param
-        transform.annotate %interchanged_op "tag" = %interchanged_tag : !transform.any_op, !transform.any_param
-        transform.yield
-      }}\n}}"""
+    transform_dilaect_code = (
+        f'module attributes {{transform.with_named_sequence}} {{\n'
+        f'  transform.named_sequence @__transform_main(%arg1: !transform.any_op {{transform.readonly}}) {{\n'
+        f'    %op_{operation_tag} = transform.structured.match attributes{{tag = "{operation_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op\n'
+        f'    %gen_op_{operation_tag} = transform.structured.generalize %op_{operation_tag} : (!transform.any_op) -> !transform.any_op\n'
+        f'    %interchanged_op = transform.structured.interchange %gen_op_{operation_tag} iterator_interchange = {str(interchange_list)} : (!transform.any_op) -> !transform.any_op\n'
+        f'    %interchanged_tag = transform.param.constant "{operation_tag}" -> !transform.any_param\n'
+        f'    transform.annotate %interchanged_op "tag" = %interchanged_tag : !transform.any_op, !transform.any_param\n'
+        f'    transform.yield\n'
+        f'  }}\n'
+        f'}}\n'
+    )
 
     code = code + transform_dilaect_code + '\n'
 
@@ -153,7 +159,7 @@ def transform_dialect_interchange(code, operation_tag, interchange_list, tmp_fil
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
@@ -161,15 +167,22 @@ def transform_dialect_interchange(code, operation_tag, interchange_list, tmp_fil
     result = re.sub(r"module attributes \{transform.with_named_sequence\} \{\s+\}", "", result)
 
     return result
-
-
 
 
 def transform_dialect_fuse(code, consumer_tag, producer_tag, tmp_file):
     code = code.strip()
 
-    transform_dilaect_code = f'\nmodule attributes {{transform.with_named_sequence}} {{\n  transform.named_sequence @__transform_main(%arg1: !transform.any_op {{transform.readonly}}) {{\n    %op_{producer_tag} = transform.structured.match attributes{{tag = "{producer_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op\n    %op_{consumer_tag} = transform.structured.match attributes{{tag = "{consumer_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op\n\n    %forall_op_{consumer_tag} = transform.get_parent_op %op_{consumer_tag}: (!transform.any_op) -> !transform.any_op\n\n    transform.structured.fuse_into_containing_op %op_{producer_tag} into %forall_op_{consumer_tag} : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)\n\n    transform.yield\n  }}\n}}'
-
+    transform_dilaect_code = (
+        f'\nmodule attributes {{transform.with_named_sequence}} {{\n'
+        f'  transform.named_sequence @__transform_main(%arg1: !transform.any_op {{transform.readonly}}) {{\n'
+        f'    %op_{producer_tag} = transform.structured.match attributes{{tag = "{producer_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op\n'
+        f'    %op_{consumer_tag} = transform.structured.match attributes{{tag = "{consumer_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op\n'
+        f'    %forall_op_{consumer_tag} = transform.get_parent_op %op_{consumer_tag}: (!transform.any_op) -> !transform.any_op\n'
+        f'    transform.structured.fuse_into_containing_op %op_{producer_tag} into %forall_op_{consumer_tag} : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)\n'
+        f'    transform.yield\n'
+        f'  }}\n'
+        f'}}\n'
+    )
 
     code = code + transform_dilaect_code + '\n'
 
@@ -177,16 +190,14 @@ def transform_dialect_fuse(code, consumer_tag, producer_tag, tmp_file):
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
     result = ''.join(result.rsplit('\n}\n', 1))
     result = re.sub(r"module attributes \{transform.with_named_sequence\} \{\s+\}", "", result)
 
-
     return result
-
 
 
 def transform_dialect_vectorise_(code, operation_tag, tmp_file):
@@ -233,45 +244,42 @@ module attributes {{transform.with_named_sequence}} {{
   }}
 }}""".strip()
 
-
     code = code + '\n' + transform_dilaect_code + '\n'
 
     with open(tmp_file, "w") as file:
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
     result = ''.join(result.rsplit('\n}\n', 1))
     result = re.sub(r"module attributes \{transform.with_named_sequence\} \{\s+\}", "", result)
 
-
     return result
-
 
 
 def transform_dialect_vectorise_whole_thing(code, tmp_file):
 
     code = code.strip()
 
-    transform_dilaect_code = f"""
-module attributes {{transform.with_named_sequence}} {{
-transform.named_sequence @__transform_main(%variant_op: !transform.any_op {{transform.readonly}})
-{{
+    transform_dilaect_code = """
+module attributes {transform.with_named_sequence} {
+transform.named_sequence @__transform_main(%variant_op: !transform.any_op {transform.readonly})
+{
 
-   %func = transform.structured.match ops{{["func.func"]}} in %variant_op
+   %func = transform.structured.match ops{["func.func"]} in %variant_op
    : (!transform.any_op) -> !transform.any_op
-  %func_0 = transform.structured.vectorize_children_and_apply_patterns %func {{vectorize_padding}}
+  %func_0 = transform.structured.vectorize_children_and_apply_patterns %func {vectorize_padding}
     : (!transform.any_op) -> (!transform.any_op)
 
        // Step 4. Vector backend
   // ======================================================
-  %f = transform.structured.match ops{{["func.func"]}} in %variant_op
+  %f = transform.structured.match ops{["func.func"]} in %variant_op
     : (!transform.any_op) -> !transform.any_op
 
-  transform.apply_patterns to %f {{
+  transform.apply_patterns to %f {
     transform.apply_patterns.vector.lower_contraction lowering_strategy = "outerproduct"
     transform.apply_patterns.vector.transfer_permutation_patterns
     transform.apply_patterns.vector.lower_multi_reduction lowering_strategy = "innerparallel"
@@ -281,16 +289,14 @@ transform.named_sequence @__transform_main(%variant_op: !transform.any_op {{tran
     transform.apply_patterns.vector.lower_shape_cast
     transform.apply_patterns.vector.lower_transpose lowering_strategy = "shuffle_1d"
     transform.apply_patterns.canonicalization
-  }} : !transform.any_op
+  } : !transform.any_op
 
 
 
   transform.yield
-}}
-}}
+}
+}
 """.strip()
-
-
 
     code = code + '\n' + transform_dilaect_code + '\n'
 
@@ -298,16 +304,14 @@ transform.named_sequence @__transform_main(%variant_op: !transform.any_op {{tran
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
     result = ''.join(result.rsplit('\n}\n', 1))
     result = re.sub(r"module attributes \{transform.with_named_sequence\} \{\s+\}", "", result)
 
-
     return result
-
 
 
 def transform_dialect_vectorise_img2col(code, operation_tag, tmp_file):
@@ -376,15 +380,13 @@ transform.named_sequence @__transform_main(%variant_op: !transform.any_op {{tran
 }}
 """.strip()
 
-
-
     code = code + '\n' + transform_dilaect_code + '\n'
 
     with open(tmp_file, "w") as file:
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
@@ -392,6 +394,7 @@ transform.named_sequence @__transform_main(%variant_op: !transform.any_op {{tran
     result = re.sub(r"module attributes \{transform.with_named_sequence\} \{\s+\}", "", result)
 
     return result
+
 
 def transform_dialect_vectorise(code, operation_tag, tmp_file):
 
@@ -419,21 +422,18 @@ transform.named_sequence @__transform_main(%variant_op: !transform.any_op {{tran
 }}
 """.strip()
 
-
-
     code = code + '\n' + transform_dilaect_code + '\n'
 
     with open(tmp_file, "w") as file:
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
     result = ''.join(result.rsplit('\n}\n', 1))
     result = re.sub(r"module attributes \{transform.with_named_sequence\} \{\s+\}", "", result)
-
 
     return result
 
@@ -481,48 +481,38 @@ transform.named_sequence @__transform_main(%variant_op: !transform.any_op {{tran
 }}
 """.strip()
 
-
-
     code = code + '\n' + transform_dilaect_code + '\n'
 
     with open(tmp_file, "w") as file:
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
     result = ''.join(result.rsplit('\n}\n', 1))
     result = re.sub(r"module attributes \{transform.with_named_sequence\} \{\s+\}", "", result)
 
-
     return result
 
 
-
-
 def evaluate_code_2(code, tmp_file):
-    command_1 = """/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt  -loop-invariant-code-motion -cse -canonicalize -cse -eliminate-empty-tensors -empty-tensor-to-alloc-tensor -one-shot-bufferize="bufferize-function-boundaries function-boundary-type-conversion=identity-layout-map" -buffer-deallocation -convert-linalg-to-loops  -convert-vector-to-scf -convert-scf-to-openmp -canonicalize -lower-affine -expand-strided-metadata -finalize-memref-to-llvm -convert-scf-to-cf -lower-affine -convert-arith-to-llvm -convert-openmp-to-llvm -convert-vector-to-llvm -convert-cf-to-llvm -convert-func-to-llvm -convert-math-to-llvm -reconcile-unrealized-casts"""
-    command_2 = """/scratch/mt5383/llvm-project/build-mlir/bin/mlir-cpu-runner -e main -entry-point-result=void -shared-libs=/scratch/mt5383/llvm-project/build-mlir/lib/libmlir_runner_utils.so,/scratch/mt5383/llvm-project/build-mlir/lib/libmlir_c_runner_utils.so,/scratch/mt5383/llvm-project/build/lib/libomp.so"""
+    command_1 = f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt  -loop-invariant-code-motion -cse -canonicalize -cse -eliminate-empty-tensors -empty-tensor-to-alloc-tensor -one-shot-bufferize='bufferize-function-boundaries function-boundary-type-conversion=identity-layout-map' -buffer-deallocation -convert-linalg-to-loops  -convert-vector-to-scf -convert-scf-to-openmp -canonicalize -lower-affine -expand-strided-metadata -finalize-memref-to-llvm -convert-scf-to-cf -lower-affine -convert-arith-to-llvm -convert-openmp-to-llvm -convert-vector-to-llvm -convert-cf-to-llvm -convert-func-to-llvm -convert-math-to-llvm -reconcile-unrealized-casts"
+    command_2 = f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-cpu-runner -e main -entry-point-result=void -shared-libs={os.getenv('LLVM_BUILD_PATH')}/lib/libmlir_runner_utils.so,{os.getenv('LLVM_BUILD_PATH')}/lib/libmlir_c_runner_utils.so,{os.getenv('LLVM_BUILD_PATH')}/lib/libomp.so"
 
     os.environ["OMP_NUM_THREADS"] = "8"
 
     with open(tmp_file, "w") as file:
         file.write(code)
 
-
-    os.popen(f"""{command_1} {tmp_file} > examples/llvm1.mlir""")
-    out = os.popen(f"""{command_1} {tmp_file} | {command_2} /dev/stdin""").read()
+    os.popen(f"{command_1} {tmp_file} > examples/llvm1.mlir")
+    out = os.popen(f"{command_1} {tmp_file} | {command_2} /dev/stdin").read()
 
     if out:
         return int(out.strip().split('\n')[-1])
     else:
         return None
-
-
-
-
 
 
 def transform_dialect_img2col(code, operation_tag, tmp_file):
@@ -546,21 +536,18 @@ module attributes {{transform.with_named_sequence}} {{
   }}
 }}""".strip()
 
-
-
     code = code + transform_dilaect_code
 
     with open(tmp_file, "w") as file:
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
     result = ''.join(result.rsplit('\n}\n', 1))
     result = re.sub(r"module attributes \{transform.with_named_sequence\} \{\s+\}", "", result)
-
 
     return result
 
@@ -584,12 +571,11 @@ def apply_conv2d_decomposition(code, operation_tag, tmp_file):
 
     code = code + '\n' + transform_dilaect_code + '\n'
 
-
     with open(tmp_file, "w") as file:
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule",
     ).read()
 
     result = result.replace("module {\n", "", 1)
@@ -599,11 +585,9 @@ def apply_conv2d_decomposition(code, operation_tag, tmp_file):
     return result
 
 
-
-
 def transform_dialect_prints(code, operation_tags: list, tmp_file):
-    matchs = '\n'.join([ f""" %op_{operation_tag} = transform.structured.match attributes{{tag = "{operation_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op """ for operation_tag in operation_tags ])
-    prints = '\n'.join([ f""" transform.print %op_{operation_tag} {{name = "selected_{operation_tag}"}}: !transform.any_op """ for operation_tag in operation_tags])
+    matchs = '\n'.join([f""" %op_{operation_tag} = transform.structured.match attributes{{tag = "{operation_tag}"}} in %arg1 : (!transform.any_op) -> !transform.any_op """ for operation_tag in operation_tags])
+    prints = '\n'.join([f""" transform.print %op_{operation_tag} {{name = "selected_{operation_tag}"}}: !transform.any_op """ for operation_tag in operation_tags])
 
     code = code.strip()
     transform_dilaect_code = f"""
@@ -619,12 +603,11 @@ def transform_dialect_prints(code, operation_tags: list, tmp_file):
 
     code = code + '\n' + transform_dilaect_code + '\n'
 
-
     with open(tmp_file, "w") as file:
         file.write(code)
 
     result = os.popen(
-        f'/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule -o {tmp_file}',
+        f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt {tmp_file} -transform-interpreter -canonicalize -test-transform-dialect-erase-schedule -o {tmp_file}",
     ).read()
 
     return result
@@ -642,7 +625,7 @@ def post_process_transform_dialect_prints(result):
 
             operation = []
             i += 1
-            while i < len(lines) and not ( ("[[[ IR printer: selected_" in lines[i]) or (" = affine_map<" in lines[i]) or ("module attributes" in lines[i])):
+            while i < len(lines) and not (("[[[ IR printer: selected_" in lines[i]) or (" = affine_map<" in lines[i]) or ("module attributes" in lines[i])):
                 operation.append(lines[i])
                 i += 1
 
@@ -652,8 +635,6 @@ def post_process_transform_dialect_prints(result):
 
         else:
             i += 1
-
-
 
     return res
 
@@ -677,10 +658,10 @@ def apply_transformation(state, code, transformation, parameters):
             for iterators_match in iterators_matches:
                 iterators = iterators_match[0]
                 iterators_list = eval(iterators)
-                if len(iterators_list) != len(parameters):
+                if type(iterators_list) is not list or len(iterators_list) != len(parameters):
                     continue
-                for i, iterator in enumerate(iterators_list):
-                    if iterator == "reduction" and parameters[i] > 0:
+                for i, iterator_type in enumerate(iterators_list):
+                    if iterator_type == "reduction" and parameters[i] > 0:
                         return ''
         new_code = transform_dialect_TP(code, state.operation_tag, parameters, tmp_file)
     elif transformation == 'interchange':
@@ -688,8 +669,6 @@ def apply_transformation(state, code, transformation, parameters):
     elif transformation == 'img2col':
         new_code = transform_dialect_img2col(code, state.operation_tag, tmp_file)
     elif transformation == 'vectorization':
-        if 'scf.forall' not in code:
-            return ''
         if state.operation_type == 'conv_2d+img2col':
             new_code = transform_dialect_vectorise_img2col(code, state.operation_tag, tmp_file)
         else:
@@ -699,12 +678,13 @@ def apply_transformation(state, code, transformation, parameters):
 
     return new_code
 
+
 def apply_transformation_wrapper(state, code, transformation, parameters, return_list):
     res = apply_transformation(state, code, transformation, parameters)
     return_list.append(res)
 
-def apply_transformation_with_timeout(state, code, transformation, parameters, timeout):
 
+def apply_transformation_with_timeout(state, code, transformation, parameters, timeout):
     manager = multiprocessing.Manager()
     return_list = manager.list()
     process = multiprocessing.Process(target=apply_transformation_wrapper, args=(state, code, transformation, parameters, return_list))
@@ -724,11 +704,9 @@ def apply_transformation_with_timeout(state, code, transformation, parameters, t
     # return apply_transformation(state, code, transformation, parameters)
 
 
-
-
 def evaluate_code(code, tmp_file):
-    command_1 = """/scratch/mt5383/llvm-project/build-mlir/bin/mlir-opt  -loop-invariant-code-motion -cse -canonicalize -cse -eliminate-empty-tensors -empty-tensor-to-alloc-tensor -one-shot-bufferize="bufferize-function-boundaries function-boundary-type-conversion=identity-layout-map" -buffer-deallocation -convert-linalg-to-loops  -convert-vector-to-scf -convert-scf-to-openmp -canonicalize -lower-affine -expand-strided-metadata -finalize-memref-to-llvm -convert-scf-to-cf -lower-affine -convert-arith-to-llvm -convert-openmp-to-llvm -convert-vector-to-llvm -convert-cf-to-llvm -convert-func-to-llvm -convert-math-to-llvm -reconcile-unrealized-casts"""
-    command_2 = """/scratch/mt5383/llvm-project/build-mlir/bin/mlir-cpu-runner -e main -entry-point-result=void -shared-libs=/scratch/mt5383/llvm-project/build-mlir/lib/libmlir_runner_utils.so,/scratch/mt5383/llvm-project/build-mlir/lib/libmlir_c_runner_utils.so,/scratch/mt5383/llvm-project/build/lib/libomp.so"""
+    command_1 = f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-opt  -loop-invariant-code-motion -cse -canonicalize -cse -eliminate-empty-tensors -empty-tensor-to-alloc-tensor -one-shot-bufferize='bufferize-function-boundaries function-boundary-type-conversion=identity-layout-map' -buffer-deallocation -convert-linalg-to-loops  -convert-vector-to-scf -convert-scf-to-openmp -canonicalize -lower-affine -expand-strided-metadata -finalize-memref-to-llvm -convert-scf-to-cf -lower-affine -convert-arith-to-llvm -convert-openmp-to-llvm -convert-vector-to-llvm -convert-cf-to-llvm -convert-func-to-llvm -convert-math-to-llvm -reconcile-unrealized-casts"
+    command_2 = f"{os.getenv('LLVM_BUILD_PATH')}/bin/mlir-cpu-runner -e main -entry-point-result=void -shared-libs={os.getenv('LLVM_BUILD_PATH')}/lib/libmlir_runner_utils.so,{os.getenv('LLVM_BUILD_PATH')}/lib/libmlir_c_runner_utils.so,{os.getenv('LLVM_BUILD_PATH')}/lib/libomp.so"
 
     os.environ["OMP_NUM_THREADS"] = "8"
 
@@ -742,9 +720,11 @@ def evaluate_code(code, tmp_file):
     else:
         return None
 
+
 def evaluate_code_wrapper(code, return_list, tmp_file):
     res = evaluate_code(code, tmp_file)
     return_list.append(res)
+
 
 def evaluate_code_with_timeout(code, timeout, tmp_file):
     manager = multiprocessing.Manager()
